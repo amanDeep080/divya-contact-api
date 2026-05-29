@@ -22,11 +22,17 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, cb) => {
+    // Allow requests with no origin (Postman, curl)
     if (!origin) return cb(null, true);
+    // Allow exact match from env var
     if (allowedOrigins.includes(origin)) return cb(null, true);
+    // Allow any *.vercel.app domain (covers preview deployments too)
+    if (origin.endsWith('.vercel.app')) return cb(null, true);
+    console.warn(`CORS blocked origin: ${origin}`);
     cb(new Error(`CORS blocked: ${origin}`));
   },
-  methods: ['POST', 'OPTIONS'],
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
 }));
 
 app.use(express.json({ limit: '10kb' }));
