@@ -8,20 +8,20 @@ require('dotenv').config();
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-// ── Security headers ────────────────────────────────────────────
+// Trust Render's proxy (fixes express-rate-limit X-Forwarded-For error)
+app.set('trust proxy', 1);
+
 app.use(helmet());
 
-// ── CORS — only allow your Vercel frontend ──────────────────────
 const allowedOrigins = [
-  process.env.FRONTEND_URL,          // e.g. https://divya-portfolio.vercel.app
-  'http://localhost:3000',            // local dev
-  'http://localhost:5500',            // VS Code Live Server
+  process.env.FRONTEND_URL,
+  'http://localhost:3000',
+  'http://localhost:5500',
   'http://127.0.0.1:5500',
 ];
 
 app.use(cors({
   origin: (origin, cb) => {
-    // Allow requests with no origin (curl, Postman) in dev
     if (!origin) return cb(null, true);
     if (allowedOrigins.includes(origin)) return cb(null, true);
     cb(new Error(`CORS blocked: ${origin}`));
@@ -29,28 +29,24 @@ app.use(cors({
   methods: ['POST', 'OPTIONS'],
 }));
 
-// ── Parse JSON body ─────────────────────────────────────────────
 app.use(express.json({ limit: '10kb' }));
 
-// ── Rate limiter — max 5 emails per IP per 15 min ───────────────
 const limiter = rateLimit({
-  windowMs : 15 * 60 * 1000,   // 15 minutes
+  windowMs : 15 * 60 * 1000,
   max      : 5,
   message  : { ok: false, error: 'Too many requests. Please try again later.' },
   standardHeaders: true,
   legacyHeaders  : false,
 });
 
-// ── Gmail transporter ───────────────────────────────────────────
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: process.env.GMAIL_USER,       // your Gmail address
-    pass: process.env.GMAIL_APP_PASS,   // 16-char App Password from Google
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASS,
   },
 });
 
-// ── Input validation helper ─────────────────────────────────────
 function validateContact({ name, email, subject, message }) {
   const errors = [];
   if (!name    || name.trim().length < 2)    errors.push('Name must be at least 2 characters.');
@@ -58,31 +54,25 @@ function validateContact({ name, email, subject, message }) {
   if (!message || message.trim().length < 10) errors.push('Message must be at least 10 characters.');
   if (name    && name.length    > 100) errors.push('Name too long.');
   if (subject && subject.length > 200) errors.push('Subject too long.');
-  if (message && message.length > 3000) errors.push('Message too long (max 3000 chars).');
+  if (message && message.length > 3000) errors.push('Message too long.');
   return errors;
 }
 
-// ── Health check ────────────────────────────────────────────────
 app.get('/', (_req, res) => {
   res.json({ status: 'ok', service: 'Divya Portfolio — Contact API' });
 });
 
-// ── POST /contact ───────────────────────────────────────────────
 app.post('/contact', limiter, async (req, res) => {
   const { name, email, subject, message } = req.body;
 
-  // Validate
   const errors = validateContact({ name, email, subject, message });
-  if (errors.length) {
-    return res.status(400).json({ ok: false, errors });
-  }
+  if (errors.length) return res.status(400).json({ ok: false, errors });
 
-  // Sanitise for display
   const safeName    = name.trim().replace(/</g, '&lt;');
   const safeSubject = subject ? subject.trim().replace(/</g, '&lt;') : '(No subject)';
   const safeMsg     = message.trim().replace(/</g, '&lt;').replace(/\n/g, '<br>');
+  const now         = new Date();
 
-  // ── Email TO Divya ─────────────────────────────────────────────
   const toOwner = {
     from   : `"Portfolio Contact" <${process.env.GMAIL_USER}>`,
     to     : process.env.RECEIVER_EMAIL || process.env.GMAIL_USER,
@@ -105,12 +95,11 @@ app.post('/contact', limiter, async (req, res) => {
           <p style="line-height:1.7;font-size:14px;color:#c8c8c8;margin:0">${safeMsg}</p>
         </div>
         <div style="padding:14px 28px;background:#111;font-size:11px;color:#4a4a4a">
-          Sent via divya-singh.vercel.app · ${new Date().toUTCString()}
+          Sent via portfolio · ${now.toUTCString()}
         </div>
       </div>`,
   };
 
-  // ── Auto-reply TO sender ───────────────────────────────────────
   const toSender = {
     from   : `"Divya Singh" <${process.env.GMAIL_USER}>`,
     to     : email,
@@ -122,15 +111,10 @@ app.post('/contact', limiter, async (req, res) => {
           <p style="font-size:13px;line-height:1.75;color:#c8c8c8;margin:0 0 20px">
             Thanks for getting in touch! I've received your message and will get back to you as soon as possible — usually within 24–48 hours.
           </p>
-          <p style="font-size:13px;line-height:1.75;color:#c8c8c8;margin:0 0 24px">
-            Looking forward to connecting with you.
-          </p>
         </div>
         <div style="padding:0 28px 24px;border-top:1px solid #222">
           <p style="font-size:12px;color:#7a7a7a;margin:20px 0 4px;text-transform:uppercase;letter-spacing:0.12em">Your message</p>
-          <p style="font-size:13px;color:#888;font-style:italic;line-height:1.6;margin:0;border-left:3px solid #FF2D2D;padding-left:12px">
-            ${safeMsg}
-          </p>
+          <p style="font-size:13px;color:#888;font-style:italic;line-height:1.6;margin:0;border-left:3px solid #FF2D2D;padding-left:12px">${safeMsg}</p>
         </div>
         <div style="padding:20px 28px 28px">
           <p style="margin:0;font-size:14px;color:#f5f5f5">Warm regards,</p>
@@ -146,20 +130,16 @@ app.post('/contact', limiter, async (req, res) => {
   try {
     await transporter.sendMail(toOwner);
     await transporter.sendMail(toSender);
-    console.log(`[${new Date().toISOString()}] Contact from ${email} — sent OK`);
+    console.log(`[${now.toISOString()}] ✅ Email sent — ${email}`);
     return res.json({ ok: true, message: 'Message sent! Check your inbox for a confirmation.' });
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Mail error:`, err.message);
+    console.error(`[${now.toISOString()}] ❌ Mail error:`, err.message);
     return res.status(500).json({ ok: false, error: 'Failed to send email. Please try again or email directly.' });
   }
 });
 
-// ── 404 catch-all ───────────────────────────────────────────────
-app.use((_req, res) => {
-  res.status(404).json({ ok: false, error: 'Not found' });
-});
+app.use((_req, res) => res.status(404).json({ ok: false, error: 'Not found' }));
 
-// ── Start ───────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`Contact API running on port ${PORT}`);
   console.log(`Gmail user: ${process.env.GMAIL_USER || '(not set)'}`);
